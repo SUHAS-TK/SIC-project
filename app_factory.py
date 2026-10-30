@@ -49,13 +49,20 @@ def create_app() -> Flask:
     from app.routes.projects import projects_bp
     from app.routes.sessions import sessions_bp
     from app.routes.speech import speech_bp
+    from app.routes.agent import agent_bp
 
     app.register_blueprint(projects_bp)
     app.register_blueprint(sessions_bp)
     app.register_blueprint(speech_bp)
+    app.register_blueprint(agent_bp)
 
     # Frontend routes
     @app.route("/")
+    @app.route("/welcome")
+    def welcome():
+        return render_template("welcome.html")
+
+    @app.route("/dashboard")
     def index():
         return render_template("index.html")
 
@@ -72,7 +79,7 @@ def create_app() -> Flask:
     def not_found(e):
         if request.path.startswith("/api/"):
             return jsonify({"error": "Not found."}), 404
-        return render_template("index.html"), 404
+        return render_template("welcome.html"), 404
 
     @app.errorhandler(413)
     def too_large(e):
@@ -83,6 +90,6 @@ def create_app() -> Flask:
         logging.getLogger(__name__).error("Unhandled 500 error: %s", e)
         if request.path.startswith("/api/"):
             return jsonify({"error": "Internal server error."}), 500
-        return render_template("index.html"), 500
+        return render_template("welcome.html"), 500
 
     return app

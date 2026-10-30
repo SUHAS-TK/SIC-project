@@ -1,11 +1,13 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Viva Examination – AI Viva Simulator</title>
   <link rel="stylesheet" href="/static/css/main.css" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet" />
+  <script src="/static/js/theme.js"></script>
 </head>
 <body>
   <nav class="navbar">
@@ -15,68 +17,88 @@
       <span class="nav-title">Viva Examination</span>
     </div>
     <div class="nav-links">
+      <button id="themeToggleBtn" class="theme-toggle-btn" title="Toggle Light / Dark mode">
+        <span class="theme-icon">☀️</span>
+        <span class="theme-label">Theme</span>
+      </button>
       <span class="badge badge-info" id="sessionInfo">Loading…</span>
       <span class="score-display" id="scoreDisplay">Score: —</span>
+      <button class="btn btn-danger btn-sm" id="navEndExamBtn" title="End examination and get performance report">
+        <span>Finish Early ⏹️</span>
+      </button>
     </div>
   </nav>
 
   <main class="viva-container">
 
-    <!-- Left: Question + Answer Panel -->
-    <section class="question-panel card">
+    <!-- Left: Spacious Structured Examination Flow -->
+    <div class="question-panel">
 
-      <!-- Progress -->
-      <div class="exam-progress">
-        <div class="progress-meta">
-          <span id="progressLabel">Question 0 / 0</span>
-          <span id="difficultyBadge" class="badge badge-medium">Medium</span>
+      <!-- 1. Progress & Exam Header Card -->
+      <section class="exam-progress-card">
+        <div class="progress-meta-row">
+          <span id="progressLabel" class="progress-counter-badge">Question 0 / 0</span>
+          <div class="exam-quick-actions">
+            <span id="difficultyBadge" class="badge badge-medium">Medium</span>
+          </div>
         </div>
         <div class="progress-bar-wrap">
           <div class="progress-bar-fill" id="examProgressFill"></div>
         </div>
-      </div>
+      </section>
 
-      <!-- Question display -->
-      <div class="question-block" id="questionBlock">
-        <div class="question-topic" id="questionTopic"></div>
+      <!-- 2. AI Voice Examiner Banner -->
+      <section class="voice-examiner-bar" id="voiceExaminerBar">
+        <div class="examiner-avatar-group">
+          <div class="examiner-mini-core" id="examinerAvatar"></div>
+          <div>
+            <div class="examiner-status-label" id="examinerStatusTitle">AI Voice Examiner</div>
+            <div class="examiner-status-sub" id="examinerStatusSub">Voice synthesis active · Ready</div>
+          </div>
+        </div>
+        <div class="examiner-controls-group">
+          <label class="auto-voice-toggle" title="Automatically speak every question when it appears">
+            <input type="checkbox" id="autoVoiceToggle" checked />
+            <span>Auto-Voice Mode</span>
+          </label>
+          <button class="btn-icon-sm" id="speakQuestionBtn" title="Read question aloud">🔊 Speak</button>
+          <button class="btn-icon-sm" id="muteBtn" title="Mute/unmute speech">🔇</button>
+        </div>
+      </section>
+
+      <!-- 3. Question Card -->
+      <section class="question-block" id="questionBlock">
+        <div class="question-topic" id="questionTopic">Topic</div>
         <div class="question-text" id="questionText">
           <div class="skeleton-text"></div>
           <div class="skeleton-text short"></div>
         </div>
+      </section>
 
-        <!-- TTS controls -->
-        <div class="tts-controls" id="ttsControls" style="display:none">
-          <button class="btn-icon-sm" id="speakQuestionBtn" title="Read question aloud">🔊</button>
-          <button class="btn-icon-sm" id="muteBtn" title="Mute speech">🔇</button>
-          <span class="tts-status" id="ttsStatus"></span>
-        </div>
-      </div>
-
-      <!-- Answer section -->
-      <div class="answer-section" id="answerSection">
-
+      <!-- 4. Answer Section Card -->
+      <section class="answer-section" id="answerSection">
         <!-- Voice recording UI -->
-        <div class="voice-ui" id="voiceUI" style="display:none">
+        <div class="voice-ui" id="voiceUI">
           <div class="mic-area">
-            <button class="mic-btn" id="micBtn" title="Start recording">
+            <button class="mic-btn" id="micBtn" title="Click to speak your answer">
               <span class="mic-icon">🎤</span>
             </button>
-            <div class="recording-status" id="recordingStatus"></div>
+            <div class="recording-status" id="recordingStatus">Click microphone to speak your answer (Groq Whisper STT)</div>
           </div>
-          <div class="transcription-area" id="transcriptionArea" style="display:none">
-            <label class="form-label">Transcription (edit if needed)</label>
-            <textarea id="transcriptionText" class="form-textarea" rows="3" placeholder="Your speech will appear here…"></textarea>
+          <div class="transcription-area" id="transcriptionArea" style="display:none;width:100%;">
+            <label class="form-label">Voice Transcription Preview (edit if needed)</label>
+            <textarea id="transcriptionText" class="form-textarea" rows="2" placeholder="Your speech will appear here…"></textarea>
           </div>
         </div>
 
         <!-- Text answer area -->
         <div class="text-answer-area">
-          <label class="form-label" for="answerTextarea">Your Answer</label>
+          <label class="form-label" for="answerTextarea">Your Technical Answer</label>
           <textarea
             id="answerTextarea"
-            class="form-textarea answer-textarea"
+            class="answer-textarea"
             rows="6"
-            placeholder="Type your answer here… Be as detailed as possible. Explain your reasoning, not just the conclusion."
+            placeholder="Type or dictate your answer here… Explain your reasoning, trade-offs, and technical rationale."
           ></textarea>
           <div class="answer-meta">
             <span class="char-count" id="charCount">0 characters</span>
@@ -84,18 +106,25 @@
         </div>
 
         <div class="answer-actions">
-          <button class="btn btn-ghost" id="skipBtn">Skip Question</button>
-          <button class="btn btn-primary" id="submitBtn" disabled>
-            <span class="btn-text">Submit Answer</span>
-            <span class="btn-spinner" style="display:none">⏳ Evaluating…</span>
-          </button>
+          <div class="answer-actions-left">
+            <button class="btn btn-ghost" id="skipBtn">Skip Question</button>
+            <button class="btn btn-danger btn-sm" id="endExamEarlyBtn">End Exam Early</button>
+          </div>
+          <div class="answer-actions-right">
+            <button class="btn btn-primary" id="submitBtn" disabled>
+              <span class="btn-text">Submit Answer</span>
+              <span class="btn-spinner" style="display:none">⏳ Evaluating…</span>
+            </button>
+          </div>
         </div>
-      </div>
+      </section>
 
-      <!-- Feedback Panel (shown after submission) -->
-      <div class="feedback-panel" id="feedbackPanel" style="display:none">
+      <!-- 5. Feedback Panel (Shown after submission) -->
+      <section class="feedback-panel" id="feedbackPanel" style="display:none">
         <div class="feedback-header">
-          <span class="feedback-score-badge" id="feedbackScoreBadge">0/100</span>
+          <div>
+            <span class="feedback-score-badge" id="feedbackScoreBadge">0/100</span>
+          </div>
           <span class="correctness-badge" id="correctnessBadge">—</span>
         </div>
 
@@ -165,8 +194,8 @@
             Finish Exam &amp; Get Report
           </button>
         </div>
-      </div>
-    </section>
+      </section>
+    </div>
 
     <!-- Right: Session Sidebar -->
     <aside class="session-sidebar">
@@ -203,16 +232,31 @@
       <div class="card sidebar-card">
         <h3 class="sidebar-title">📜 Question History</h3>
         <div class="history-list" id="historyList">
-          <div class="empty-state-sm">No questions yet</div>
+          <div class="empty-state-sm">No questions answered yet</div>
         </div>
       </div>
     </aside>
   </main>
+
+  <!-- Early Exit Confirmation Modal -->
+  <div class="viva-modal-backdrop hidden" id="earlyExitModal">
+    <div class="viva-modal-box">
+      <h3 class="viva-modal-title">Finish Examination Early?</h3>
+      <p class="viva-modal-body" id="earlyExitModalText">
+        You have answered questions so far. Ending now will complete the session and generate your official Performance Report based on your completed answers.
+      </p>
+      <div class="viva-modal-actions">
+        <button class="btn btn-secondary" id="cancelEarlyExitBtn">Continue Exam</button>
+        <button class="btn btn-danger" id="confirmEarlyExitBtn">End Exam &amp; View Report</button>
+      </div>
+    </div>
+  </div>
 
   <div class="toast-container" id="toastContainer"></div>
   <script>
     window.SESSION_ID = {{ session_id }};
   </script>
   <script src="/static/js/viva.js"></script>
+  <script src="/static/js/arc_reactor.js"></script>
 </body>
 </html>

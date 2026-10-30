@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════
    viva.js – Examination page logic
    Handles: question flow, text/voice answering, feedback display,
-   speech synthesis, adaptive difficulty, session sidebar
+   voice assistant speech synthesis, adaptive difficulty, session sidebar
    ═══════════════════════════════════════════════════════ */
 "use strict";
 
@@ -27,9 +27,67 @@ function nl2br(str) {
   return escapeHtml(str).replace(/\n/g, "<br/>");
 }
 
+/**
+ * Render a question string with structured formatting.
+ *
+ * Detects:
+ *  - Multi-part questions labelled a) b) c) and renders each on its own block.
+ *  - A stem sentence (text before the first a) label) shown as the intro.
+ *  - Single-part questions rendered as plain text.
+ *
+ * @param {string} text - Raw question_text from the API.
+ * @returns {string} - Safe HTML string for innerHTML injection.
+ */
+function renderQuestionHTML(text) {
+  if (!text) return "";
+
+  // Normalise line endings
+  const raw = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+
+  // Split into lines; detect sub-part lines like "a) ...", "b) ...", "c) ..."
+  const lines = raw.split("\n").map(l => l.trim()).filter(Boolean);
+  const subPartPattern = /^([a-c])\)\s+(.+)$/i;
+
+  const stemLines  = [];
+  const subParts   = []; // [{label, text}]
+
+  for (const line of lines) {
+    const m = line.match(subPartPattern);
+    if (m) {
+      subParts.push({ label: m[1].toLowerCase(), text: m[2] });
+    } else {
+      if (subParts.length === 0) {
+        stemLines.push(line);
+      }
+      // Lines after sub-parts started are appended to the last sub-part
+      else {
+        subParts[subParts.length - 1].text += " " + line;
+      }
+    }
+  }
+
+  // No sub-parts — plain text with soft line-breaks
+  if (subParts.length === 0) {
+    return `<span class="q-plain">${escapeHtml(raw).replace(/\n/g, "<br/>")}</span>`;
+  }
+
+  // Has sub-parts — build structured HTML
+  const stemHtml = stemLines.length
+    ? `<div class="q-stem">${escapeHtml(stemLines.join(" "))}</div>`
+    : "";
+
+  const partsHtml = subParts.map(p => `
+    <div class="q-subpart">
+      <span class="q-subpart-label">${p.label})</span>
+      <span class="q-subpart-text">${escapeHtml(p.text)}</span>
+    </div>`).join("");
+
+  return `${stemHtml}<div class="q-subparts-list">${partsHtml}</div>`;
+}
+
 // ── State ──────────────────────────────────────────────────
 let currentQuestion = null;
-let voiceMode = false;
+let voiceMode = true; // Enabled by default for active voice assistant
 let mediaRecorder = null;
 let audioChunks = [];
 let isRecording = false;
@@ -57,9 +115,11 @@ const micBtn = document.getElementById("micBtn");
 const recordingStatus = document.getElementById("recordingStatus");
 const transcriptionArea = document.getElementById("transcriptionArea");
 const transcriptionText = document.getElementById("transcriptionText");
-const ttsControls = document.getElementById("ttsControls");
 const speakQuestionBtn = document.getElementById("speakQuestionBtn");
 const muteBtn = document.getElementById("muteBtn");
+const autoVoiceToggle = document.getElementById("autoVoiceToggle");
+const examinerStatusSub = document.getElementById("examinerStatusSub");
+const examinerAvatar = document.getElementById("examinerAvatar");
 const historyList = document.getElementById("historyList");
 const scoreRing = document.getElementById("scoreRing");
 const ringScore = document.getElementById("ringScore");
@@ -70,7 +130,7 @@ const scoreDisplay = document.getElementById("scoreDisplay");
 answerTextarea.addEventListener("input", () => {
   const len = answerTextarea.value.length;
   charCount.textContent = `${len} character${len !== 1 ? "s" : ""}`;
-  submitBtn.disabled = len < 5;
+  submitBtn.disabled = len < 3;
 });
 
 // ── Load session & first question ─────────────────────────
@@ -81,11 +141,8 @@ async function initSession() {
     const data = await res.json();
     const session = data.session;
 
-    voiceMode = session.voice_mode;
-    if (voiceMode) {
-      voiceUI.style.display = "flex";
-      ttsControls.style.display = "flex";
-    }
+    window.CURRENT_PROJECT_ID = session.project_id;
+    voiceMode = session.voice_mode || true;
 
     sessionInfo.textContent = `${session.difficulty.charAt(0).toUpperCase() + session.difficulty.slice(1)} · ${session.total_questions} Q`;
     sessionInfo.className = `badge badge-${session.difficulty}`;
@@ -108,6 +165,8 @@ async function fetchNextQuestion() {
   transcriptionArea.style.display = "none";
   transcriptionText.value = "";
 
+  if (examinerStatusSub) examinerStatusSub.textContent = "Synthesizing next question…";
+
   try {
     const res = await fetch(`/api/sessions/${SESSION_ID}/question`);
     const data = await res.json();
@@ -121,19 +180,25 @@ async function fetchNextQuestion() {
     renderQuestion(currentQuestion);
   } catch (err) {
     toast("Failed to load question: " + err.message, "error");
+    if (examinerStatusSub) examinerStatusSub.textContent = "Error loading question.";
   }
 }
 
 function renderQuestion(q) {
-  questionText.textContent = q.question_text;
+  questionText.innerHTML = renderQuestionHTML(q.question_text);
   questionTopic.textContent = q.topic || "";
 
   const diff = q.difficulty || "medium";
   difficultyBadge.textContent = diff.charAt(0).toUpperCase() + diff.slice(1);
   difficultyBadge.className = `badge badge-${diff}`;
 
-  // Speak question if voice mode
-  if (voiceMode && !speechMuted) speakText(q.question_text);
+  // Voice Assistant: automatically read question if Auto-Voice is active
+  const isAutoVoice = autoVoiceToggle ? autoVoiceToggle.checked : true;
+  if (isAutoVoice && !speechMuted) {
+    speakText(q.question_text);
+  } else if (examinerStatusSub) {
+    examinerStatusSub.textContent = "Question ready. Click Speak or Mic to begin.";
+  }
 
   updateProgressUI();
 }
@@ -156,13 +221,15 @@ skipBtn.addEventListener("click", () => {
 
 async function submitAnswer() {
   const answer = answerTextarea.value.trim();
-  if (!answer || answer.length < 2) { toast("Please write an answer first.", "warn"); return; }
+  if (!answer || answer.length < 2) { toast("Please write or speak an answer first.", "warn"); return; }
   if (!currentQuestion) return;
 
   submitBtn.querySelector(".btn-text").style.display = "none";
   submitBtn.querySelector(".btn-spinner").style.display = "inline";
   submitBtn.disabled = true;
   skipBtn.disabled = true;
+
+  if (examinerStatusSub) examinerStatusSub.textContent = "AI Examiner evaluating your answer against rubric…";
 
   try {
     const res = await fetch(`/api/sessions/${SESSION_ID}/answer`, {
@@ -195,17 +262,24 @@ async function submitAnswer() {
     updateSidebar(data);
 
     // Check if exam is complete after this answer
-    if (data.questions_answered >= parseInt(sessionInfo.textContent.match(/(\d+) Q/)?.[1] || "10")) {
+    const totalQ = parseInt(sessionInfo.textContent.match(/(\d+) Q/)?.[1] || "10");
+    if (data.questions_answered >= totalQ) {
       nextQuestionBtn.style.display = "none";
       finishExamBtn.style.display = "inline-flex";
     }
 
-    // Speak feedback summary if voice mode
-    if (voiceMode && !speechMuted) {
-      const summary = correctness === "correct"
-        ? "Well done! " + (fb.understood_correctly?.[0] || "")
-        : "Here's what to understand: " + (fb.correct_reasoning || "").slice(0, 200);
-      speakText(summary);
+    // Voice Assistant speaks feedback summary if Auto-Voice is active
+    const isAutoVoice = autoVoiceToggle ? autoVoiceToggle.checked : true;
+    if (isAutoVoice && !speechMuted) {
+      let voiceSummary = "";
+      if (correctness === "correct") {
+        voiceSummary = `Excellent response! You scored ${fb.score || 100} out of 100. ` + (fb.understood_correctly?.[0] || "");
+      } else if (correctness === "partial") {
+        voiceSummary = `Partially correct. You scored ${fb.score || 50} out of 100. Key point: ` + (fb.correct_reasoning || "").slice(0, 180);
+      } else {
+        voiceSummary = `Incorrect. Let's understand why: ` + (fb.correct_reasoning || "").slice(0, 180);
+      }
+      speakText(voiceSummary);
     }
 
   } catch (err) {
@@ -214,6 +288,7 @@ async function submitAnswer() {
     submitBtn.querySelector(".btn-spinner").style.display = "none";
     submitBtn.disabled = false;
     skipBtn.disabled = false;
+    if (examinerStatusSub) examinerStatusSub.textContent = "Evaluation error. Please retry.";
   }
 }
 
@@ -238,7 +313,7 @@ function renderFeedback(fb, data) {
   (fb.understood_correctly || []).forEach(item => {
     ul.innerHTML += `<li>${escapeHtml(item)}</li>`;
   });
-  if (!ul.children.length) ul.innerHTML = "<li>No strengths identified for this answer.</li>";
+  if (!ul.children.length) ul.innerHTML = "<li>No specific strengths recorded for this response.</li>";
 
   // Misconceptions
   const ml = document.getElementById("misconceptionsList");
@@ -248,135 +323,128 @@ function renderFeedback(fb, data) {
   });
   document.getElementById("misconceptionsSection").style.display = ml.children.length ? "flex" : "none";
 
-  // Strengths tab (same as understood)
-  document.getElementById("strengthsList").innerHTML = ul.innerHTML;
-
   // Correct reasoning
-  document.getElementById("correctReasoning").innerHTML = nl2br(fb.correct_reasoning || "");
+  document.getElementById("correctReasoning").innerHTML = nl2br(fb.correct_reasoning || "No explanation provided.");
 
   // Detailed explanation
-  const detailedEl = document.getElementById("detailedExplanation");
-  const detailedSec = document.getElementById("detailedSection");
+  const detSec = document.getElementById("detailedSection");
   if (fb.detailed_explanation) {
-    detailedEl.innerHTML = nl2br(fb.detailed_explanation);
-    detailedSec.style.display = "flex";
+    detSec.style.display = "flex";
+    document.getElementById("detailedExplanation").innerHTML = nl2br(fb.detailed_explanation);
   } else {
-    detailedSec.style.display = "none";
+    detSec.style.display = "none";
   }
 
-  // Example/Analogy
-  document.getElementById("exampleAnalogy").textContent = fb.example_or_analogy || "";
+  // Example / Analogy
+  document.getElementById("exampleAnalogy").textContent = fb.example_or_analogy || "No specific analogy provided.";
+
+  // Strengths tab
+  const sl = document.getElementById("strengthsList");
+  sl.innerHTML = "";
+  (fb.understood_correctly || []).forEach(item => {
+    sl.innerHTML += `<li>${escapeHtml(item)}</li>`;
+  });
+  if (!sl.children.length) sl.innerHTML = "<li>Keep practicing to build your conceptual depth.</li>";
 
   // Model answer
   document.getElementById("modelAnswer").innerHTML = nl2br(fb.improved_answer || "No model answer provided.");
 
-  // Follow-up
-  const fuDiff = fb.follow_up_difficulty || "medium";
-  document.getElementById("followUpDiff").textContent = fuDiff.toUpperCase();
-  document.getElementById("followUpDiff").className = `follow-up-diff badge-${fuDiff}`;
-  document.getElementById("followUpQuestion").textContent = fb.follow_up_question || "";
+  // Follow-up question
+  const fBox = document.getElementById("followUpBox");
+  if (fb.follow_up_question) {
+    fBox.style.display = "block";
+    document.getElementById("followUpDiff").textContent = (fb.follow_up_difficulty || "medium").toUpperCase();
+    document.getElementById("followUpQuestion").textContent = fb.follow_up_question;
+  } else {
+    fBox.style.display = "none";
+  }
 
   // Evidence
-  const ev = document.getElementById("evidenceList");
-  ev.innerHTML = "";
-  (fb.project_evidence || []).forEach(e => {
-    ev.innerHTML += `<li>${escapeHtml(e)}</li>`;
+  const el = document.getElementById("evidenceList");
+  el.innerHTML = "";
+  (fb.project_evidence || []).forEach(item => {
+    el.innerHTML += `<li>${escapeHtml(item)}</li>`;
   });
-  if (!ev.children.length) ev.innerHTML = "<li>No direct evidence cited.</li>";
+  if (!el.children.length) el.innerHTML = "<li>General computer science evaluation.</li>";
 
-  // Reset to first tab
-  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-  document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
-  document.querySelector(".tab-btn[data-tab='correction']").classList.add("active");
-  document.getElementById("tab-correction").classList.add("active");
+  // Feedback tabs logic
+  document.querySelectorAll(".tab-btn").forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+      document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+      btn.classList.add("active");
+      const tab = document.getElementById(`tab-${btn.dataset.tab}`);
+      if (tab) tab.classList.add("active");
+    };
+  });
 }
 
-// ── Tab switching ──────────────────────────────────────────
-document.querySelectorAll(".tab-btn").forEach(btn => {
-  btn.addEventListener("click", () => {
-    const tab = btn.dataset.tab;
-    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-    document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
-    btn.classList.add("active");
-    document.getElementById(`tab-${tab}`).classList.add("active");
-  });
+// ── Next question / Complete ──────────────────────────────
+nextQuestionBtn.addEventListener("click", () => {
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
+  fetchNextQuestion();
 });
-
-// ── Next question / Finish ─────────────────────────────────
-nextQuestionBtn.addEventListener("click", fetchNextQuestion);
 
 finishExamBtn.addEventListener("click", () => {
   window.location.href = `/report/${SESSION_ID}`;
 });
 
-// ── Sidebar ────────────────────────────────────────────────
+function showExamComplete() {
+  questionText.innerHTML = "<h3>🎉 Viva Voce Complete!</h3><p>You have answered all questions. Click below to inspect your detailed performance report, topic scores, and examiner feedback.</p>";
+  questionTopic.textContent = "Exam Finished";
+  answerSection.style.display = "none";
+  feedbackPanel.style.display = "none";
+  nextQuestionBtn.style.display = "none";
+  finishExamBtn.style.display = "inline-flex";
+
+  if (examinerStatusSub) examinerStatusSub.textContent = "Examination completed. Ready for performance report.";
+  if (!speechMuted) speakText("Congratulations! Your viva examination is complete. Preparing your final performance report.");
+}
+
+// ── Sidebar Updates ────────────────────────────────────────
 function updateSidebar(data) {
-  // Score ring
-  const avg = data.session_score || 0;
-  ringScore.textContent = `${avg}`;
-  scoreDisplay.textContent = `Score: ${avg}`;
-
-  const circumference = 201;
-  const offset = circumference - (avg / 100) * circumference;
-  scoreRing.style.strokeDashoffset = offset;
-  scoreRing.style.stroke = avg >= 70 ? "var(--success)" : avg >= 40 ? "var(--warn)" : "var(--error)";
-
-  // Stats
-  const total = parseInt(sessionInfo.textContent.match(/(\d+) Q/)?.[1] || "10");
-  document.getElementById("statQuestions").textContent = `${data.questions_answered}/${total}`;
+  document.getElementById("statQuestions").textContent = `${sessionStats.answered}/${sessionInfo.textContent.match(/(\d+) Q/)?.[1] || "10"}`;
   document.getElementById("statCorrect").textContent = sessionStats.correct;
   document.getElementById("statPartial").textContent = sessionStats.partial;
   document.getElementById("statIncorrect").textContent = sessionStats.incorrect;
 
-  // History
-  historyList.innerHTML = "";
-  questionHistory.slice().reverse().forEach(h => {
-    const item = document.createElement("div");
-    item.className = `history-item ${h.correctness || ""}`;
-    const scoreColor = h.score >= 70 ? "var(--success)" : h.score >= 40 ? "var(--warn)" : "var(--error)";
-    item.innerHTML = `
-      <span class="history-item-num">Q${h.index}</span>
-      <span class="history-item-text" title="${escapeHtml(h.text)}">${escapeHtml(h.topic)}</span>
-      <span class="history-item-score" style="color:${scoreColor}">${h.score}</span>`;
-    historyList.appendChild(item);
+  const avg = data.session_score || 0;
+  ringScore.textContent = Math.round(avg);
+  scoreDisplay.textContent = `Score: ${Math.round(avg)}/100`;
+
+  // Animate ring (stroke-dashoffset from 201 to 0)
+  const offset = 201 - (201 * avg) / 100;
+  scoreRing.style.strokeDashoffset = offset;
+  scoreRing.style.stroke = avg >= 70 ? "var(--success)" : avg >= 40 ? "var(--warn)" : "var(--error)";
+
+  // History list
+  historyList.innerHTML = questionHistory.map(q => `
+    <div class="history-item">
+      <div class="history-item-top">
+        <span class="history-q-num">Q${q.index}</span>
+        <span class="history-topic">${escapeHtml(q.topic)}</span>
+        <span class="history-score">${q.score}/100</span>
+      </div>
+      <div class="history-badge ${q.correctness}">${q.correctness}</div>
+    </div>
+  `).join("");
+}
+
+// ── Microphone Recording for Answers ───────────────────────
+if (micBtn) {
+  micBtn.addEventListener("click", () => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
   });
 }
 
-// ── Exam complete ──────────────────────────────────────────
-function showExamComplete() {
-  questionText.textContent = "Examination complete! All questions have been answered.";
-  questionTopic.textContent = "COMPLETED";
-  answerSection.style.display = "none";
-  feedbackPanel.style.display = "flex";
-
-  document.getElementById("feedbackScoreBadge").textContent = `${Math.round(sessionStats.totalScore)}/100`;
-  document.getElementById("correctnessBadge").textContent = "Exam Complete";
-  document.getElementById("correctnessBadge").className = "correctness-badge correct";
-  document.getElementById("tab-correction").innerHTML = `
-    <div class="feedback-section">
-      <h4>Examination Summary</h4>
-      <p class="feedback-text">You've completed all ${sessionStats.answered} questions.
-      Click "Finish Exam" to view your full performance report.</p>
-    </div>`;
-  nextQuestionBtn.style.display = "none";
-  finishExamBtn.style.display = "inline-flex";
-}
-
-// ── Voice: microphone recording ────────────────────────────
-micBtn.addEventListener("click", toggleRecording);
-
-async function toggleRecording() {
-  if (isRecording) {
-    stopRecording();
-  } else {
-    await startRecording();
-  }
-}
-
 async function startRecording() {
+  audioChunks = [];
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    audioChunks = [];
     mediaRecorder = new MediaRecorder(stream);
 
     mediaRecorder.ondataavailable = e => {
@@ -388,15 +456,16 @@ async function startRecording() {
       uploadAudio();
     };
 
-    mediaRecorder.start(200);
+    mediaRecorder.start(250);
     isRecording = true;
     micBtn.classList.add("recording");
     micBtn.querySelector(".mic-icon").textContent = "⏹";
-    recordingStatus.textContent = "Recording… click to stop";
+    recordingStatus.textContent = "Listening… Click microphone again when done speaking.";
+    if (examinerStatusSub) examinerStatusSub.textContent = "Transcribing student speech via Whisper…";
 
   } catch (err) {
     const msg = err.name === "NotAllowedError"
-      ? "Microphone permission denied. Please allow microphone access in your browser."
+      ? "Microphone access denied. Please grant permission in browser settings."
       : `Could not access microphone: ${err.message}`;
     toast(msg, "error");
   }
@@ -409,12 +478,12 @@ function stopRecording() {
   isRecording = false;
   micBtn.classList.remove("recording");
   micBtn.querySelector(".mic-icon").textContent = "🎤";
-  recordingStatus.textContent = "Processing audio…";
+  recordingStatus.textContent = "Processing speech with Groq Whisper…";
 }
 
 async function uploadAudio() {
   if (!audioChunks.length) {
-    recordingStatus.textContent = "";
+    recordingStatus.textContent = "Click microphone to speak your answer";
     toast("No audio recorded.", "warn");
     return;
   }
@@ -423,9 +492,7 @@ async function uploadAudio() {
   const ext = mimeType.includes("ogg") ? "ogg" : "webm";
   const blob = new Blob(audioChunks, { type: mimeType });
   const formData = new FormData();
-  formData.append("audio", blob, `recording.${ext}`);
-
-  recordingStatus.textContent = "Transcribing…";
+  formData.append("audio", blob, `viva_answer.${ext}`);
 
   try {
     const res = await fetch("/api/speech/transcribe", { method: "POST", body: formData });
@@ -437,24 +504,24 @@ async function uploadAudio() {
 
     const transcript = data.transcript || "";
     if (!transcript.trim()) {
-      toast("No speech detected. Please try again.", "warn");
-      recordingStatus.textContent = "";
+      toast("No audible words detected. Please try speaking again.", "warn");
+      recordingStatus.textContent = "Click microphone to speak your answer";
       return;
     }
 
-    // Show editable transcription
+    // Show transcription area
     transcriptionArea.style.display = "flex";
     transcriptionText.value = transcript;
-    transcriptionText.dispatchEvent(new Event("input"));
 
-    // Sync to main answer box
+    // Fill main answer box and trigger character count/submit enable
     answerTextarea.value = transcript;
     answerTextarea.dispatchEvent(new Event("input"));
-    recordingStatus.textContent = "✓ Transcribed (edit if needed)";
+    recordingStatus.textContent = "✓ Speech transcribed! Review and edit if needed.";
+    if (examinerStatusSub) examinerStatusSub.textContent = "Answer transcribed. Ready for submission.";
 
   } catch (err) {
-    toast("Transcription error: " + err.message, "error");
-    recordingStatus.textContent = "";
+    toast("Speech recognition error: " + err.message, "error");
+    recordingStatus.textContent = "Click microphone to speak your answer";
   }
 }
 
@@ -464,17 +531,37 @@ transcriptionText.addEventListener("input", () => {
   answerTextarea.dispatchEvent(new Event("input"));
 });
 
-// ── Speech synthesis (TTS) ─────────────────────────────────
+// ── Speech Synthesis (TTS) ─────────────────────────────────
 function speakText(text) {
   if (speechMuted || !window.speechSynthesis) return;
   window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.rate = 0.95;
+
+  // Strip markdown and code blocks for clean pronunciation
+  const clean = text
+    .replace(/[*#`_~]/g, "")
+    .replace(/<[^>]*>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!clean) return;
+
+  const utterance = new SpeechSynthesisUtterance(clean);
+  utterance.rate = 1.0;
   utterance.pitch = 1.0;
   utterance.volume = 1.0;
-  utterance.onstart = () => { isSpeaking = true; document.getElementById("ttsStatus").textContent = "Speaking…"; };
-  utterance.onend = () => { isSpeaking = false; document.getElementById("ttsStatus").textContent = ""; };
-  utterance.onerror = () => { isSpeaking = false; document.getElementById("ttsStatus").textContent = ""; };
+
+  utterance.onstart = () => {
+    isSpeaking = true;
+    if (examinerAvatar) examinerAvatar.classList.add("speaking");
+    if (examinerStatusSub) examinerStatusSub.textContent = "AI Voice Examiner speaking aloud…";
+  };
+
+  utterance.onend = utterance.onerror = () => {
+    isSpeaking = false;
+    if (examinerAvatar) examinerAvatar.classList.remove("speaking");
+    if (examinerStatusSub) examinerStatusSub.textContent = "Voice Examiner ready.";
+  };
+
   window.speechSynthesis.speak(utterance);
 }
 
@@ -488,8 +575,54 @@ if (muteBtn) {
   muteBtn.addEventListener("click", () => {
     speechMuted = !speechMuted;
     muteBtn.textContent = speechMuted ? "🔕" : "🔇";
-    muteBtn.title = speechMuted ? "Unmute" : "Mute speech";
-    if (speechMuted) window.speechSynthesis.cancel();
+    muteBtn.title = speechMuted ? "Unmute Voice" : "Mute Voice";
+    if (speechMuted) {
+      if (window.speechSynthesis) window.speechSynthesis.cancel();
+      if (examinerStatusSub) examinerStatusSub.textContent = "Voice assistant muted.";
+    } else {
+      if (examinerStatusSub) examinerStatusSub.textContent = "Voice assistant unmuted.";
+    }
+  });
+}
+
+// ── Early Examination Finish ──────────────────────────────
+const earlyExitModal = document.getElementById("earlyExitModal");
+const earlyExitModalText = document.getElementById("earlyExitModalText");
+const cancelEarlyExitBtn = document.getElementById("cancelEarlyExitBtn");
+const confirmEarlyExitBtn = document.getElementById("confirmEarlyExitBtn");
+const endExamEarlyBtn = document.getElementById("endExamEarlyBtn");
+const navEndExamBtn = document.getElementById("navEndExamBtn");
+
+function promptEarlyExit() {
+  const answered = sessionStats.answered;
+  if (answered === 0) {
+    toast("Please answer at least one question before ending early so a meaningful report can be generated.", "warn");
+    return;
+  }
+  const totalQ = parseInt(sessionInfo.textContent.match(/(\d+) Q/)?.[1] || "10");
+  const avg = Math.round(sessionStats.totalScore || 0);
+
+  if (earlyExitModalText) {
+    earlyExitModalText.innerHTML = `You have completed <strong>${answered} of ${totalQ}</strong> questions so far with an average score of <strong>${avg}/100</strong>.<br/><br/>Ending now will mark the examination complete and generate your official Performance Report based on your completed answers.`;
+  }
+  if (earlyExitModal) earlyExitModal.classList.remove("hidden");
+}
+
+if (endExamEarlyBtn) endExamEarlyBtn.addEventListener("click", promptEarlyExit);
+if (navEndExamBtn) navEndExamBtn.addEventListener("click", promptEarlyExit);
+
+if (cancelEarlyExitBtn) {
+  cancelEarlyExitBtn.addEventListener("click", () => {
+    if (earlyExitModal) earlyExitModal.classList.add("hidden");
+  });
+}
+
+if (confirmEarlyExitBtn) {
+  confirmEarlyExitBtn.addEventListener("click", () => {
+    confirmEarlyExitBtn.disabled = true;
+    confirmEarlyExitBtn.textContent = "Generating Report…";
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    window.location.href = `/report/${SESSION_ID}`;
   });
 }
 

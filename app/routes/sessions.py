@@ -1,10 +1,15 @@
 """
-Viva session routes: create, question flow, answer submission, feedback, report.
+Viva session routes: create, question flow, answer submission, feedback, report, email.
 """
 from __future__ import annotations
 
+import html
 import logging
+import re
+import smtplib
 from datetime import datetime, timezone
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from typing import Optional
 
 from flask import Blueprint, jsonify, request
@@ -33,13 +38,109 @@ def _retrieve_context(project_id: int, query: str, top_k: int = 5) -> list[dict]
     return store.retrieve(query, top_k=top_k)
 
 
+def _build_report_email_html(project_title: str, report: dict, session_dict: dict, questions: list[dict]) -> str:
+    """Construct an elegant, responsive HTML email for the viva report."""
+    score = report.get("overall_score", session_dict.get("overall_score", 0))
+    grade = report.get("grade", "B")
+    exec_summary = report.get("executive_summary", "Viva Voce examination completed.")
+    strong_areas = report.get("strong_areas", [])
+    weak_areas = report.get("weak_areas", [])
+    revision_topics = report.get("revision_topics", [])
+    practice_qs = report.get("practice_questions", [])
+    comments = report.get("examiner_comments", "Good effort throughout the session.")
+
+    def render_list(items: list) -> str:
+        if not items:
+            return "<li style='color:#8892a4;'>None noted.</li>"
+        return "".join(f"<li style='margin-bottom:6px;'>{html.escape(str(item))}</li>" for item in items)
+
+    practice_html = ""
+    for pq in practice_qs[:4]:
+        if isinstance(pq, dict):
+            q_text = html.escape(pq.get("question", ""))
+            q_diff = html.escape(pq.get("difficulty", "medium"))
+            practice_html += f"<div style='background:#1a1e2a;border-left:3px solid #00e5ff;padding:10px;margin-bottom:8px;border-radius:4px;'><strong>[{q_diff.upper()}]</strong> {q_text}</div>"
+        else:
+            practice_html += f"<div style='background:#1a1e2a;border-left:3px solid #00e5ff;padding:10px;margin-bottom:8px;border-radius:4px;'>{html.escape(str(pq))}</div>"
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Viva Voce Performance Report</title>
+</head>
+<body style="margin:0;padding:20px;background:#0d0f14;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#e8eaf0;">
+  <div style="max-width:640px;margin:0 auto;background:#13161e;border-radius:12px;border:1px solid #2a2e3d;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.5);">
+    
+    <!-- Header -->
+    <div style="background:linear-gradient(135deg,#0a192f,#1e293b);padding:28px 24px;border-bottom:1px solid #2a2e3d;text-align:center;">
+      <div style="display:inline-block;width:44px;height:44px;border-radius:50%;background:#00e5ff15;border:2px solid #00e5ff;line-height:44px;font-size:22px;margin-bottom:10px;">🎓</div>
+      <h1 style="margin:0;font-size:22px;color:#ffffff;letter-spacing:-0.5px;">AI Viva Simulator</h1>
+      <p style="margin:6px 0 0;font-size:14px;color:#8892a4;">Official Performance Assessment · {html.escape(project_title)}</p>
+    </div>
+
+    <!-- Score Block -->
+    <div style="padding:24px;text-align:center;background:#1a1e2a;border-bottom:1px solid #2a2e3d;">
+      <div style="display:inline-block;padding:16px 28px;background:#0f1117;border-radius:12px;border:1px solid #38bdf844;">
+        <div style="font-size:42px;font-weight:800;color:#00e5ff;line-height:1;">{score}</div>
+        <div style="font-size:12px;text-transform:uppercase;color:#8892a4;letter-spacing:1px;margin-top:4px;">Overall Score / 100</div>
+      </div>
+      <div style="margin-top:12px;">
+        <span style="display:inline-block;padding:4px 14px;border-radius:20px;background:#38bdf820;color:#38bdf8;font-weight:700;font-size:14px;border:1px solid #38bdf855;">Grade: {html.escape(grade)}</span>
+        <span style="display:inline-block;margin-left:10px;padding:4px 14px;border-radius:20px;background:#2a2e3d;color:#e8eaf0;font-size:13px;">{len(questions)} Questions Evaluated</span>
+      </div>
+      <p style="margin:16px 0 0;font-size:14px;color:#cbd5e1;line-height:1.6;text-align:left;background:#13161e;padding:14px;border-radius:8px;border:1px solid #2a2e3d;">{html.escape(exec_summary)}</p>
+    </div>
+
+    <!-- Strengths & Weaknesses -->
+    <div style="padding:24px;border-bottom:1px solid #2a2e3d;">
+      <h3 style="margin:0 0 10px;color:#3dd68c;font-size:16px;">💪 Key Strengths</h3>
+      <ul style="margin:0 0 20px 20px;padding:0;color:#cbd5e1;font-size:14px;line-height:1.6;">
+        {render_list(strong_areas)}
+      </ul>
+
+      <h3 style="margin:0 0 10px;color:#f59e0b;font-size:16px;">⚠️ Areas for Improvement</h3>
+      <ul style="margin:0 0 0 20px;padding:0;color:#cbd5e1;font-size:14px;line-height:1.6;">
+        {render_list(weak_areas)}
+      </ul>
+    </div>
+
+    <!-- Recommended Revision -->
+    <div style="padding:24px;border-bottom:1px solid #2a2e3d;">
+      <h3 style="margin:0 0 10px;color:#38bdf8;font-size:16px;">📖 Recommended Revision Topics</h3>
+      <ul style="margin:0 0 0 20px;padding:0;color:#cbd5e1;font-size:14px;line-height:1.6;">
+        {render_list(revision_topics)}
+      </ul>
+    </div>
+
+    <!-- Practice Questions -->
+    {f'''<div style="padding:24px;border-bottom:1px solid #2a2e3d;">
+      <h3 style="margin:0 0 12px;color:#a855f7;font-size:16px;">🧪 Practice Viva Questions</h3>
+      {practice_html}
+    </div>''' if practice_html else ''}
+
+    <!-- Examiner Comments -->
+    <div style="padding:24px;background:#0f1117;">
+      <h3 style="margin:0 0 8px;color:#ffffff;font-size:15px;">🎓 Examiner's Final Remarks</h3>
+      <p style="margin:0;font-size:13px;color:#8892a4;line-height:1.6;font-style:italic;">"{html.escape(comments)}"</p>
+    </div>
+
+    <!-- Footer -->
+    <div style="padding:16px 24px;background:#0a0c12;text-align:center;font-size:12px;color:#555e70;border-top:1px solid #1a1e2a;">
+      Generated by AI Viva Simulator with RAG & Groq Intelligence. Keep practicing to master your defense!
+    </div>
+  </div>
+</body>
+</html>"""
+
+
 @sessions_bp.route("", methods=["POST"])
 def create_session():
     """Start a new viva session for a project."""
     data = request.get_json(force=True, silent=True) or {}
     project_id = data.get("project_id")
     difficulty = data.get("difficulty", "medium")
-    total_questions = min(max(int(data.get("total_questions", 10)), 3), 30)
+    total_questions = min(max(int(data.get("total_questions", 10)), 1), 50)
     voice_mode = bool(data.get("voice_mode", False))
 
     if not project_id:
@@ -333,6 +434,169 @@ def get_report(session_id: int):
         })
     finally:
         db.close()
+
+
+_LAST_SENT_EMAILS: dict[int, dict] = {}
+
+
+@sessions_bp.route("/<int:session_id>/email-report", methods=["POST"])
+def email_report(session_id: int):
+    """
+    Email the complete viva performance report to any user-specified email address(es).
+    Supports single or multiple recipients (comma-separated), and real SMTP or preview delivery.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    raw_email = (data.get("email") or "").strip().lower()
+
+    if not raw_email:
+        return jsonify({"error": "Email address is required."}), 400
+
+    # Parse comma or semicolon separated recipients
+    raw_list = [e.strip() for e in re.split(r"[,;]+", raw_email) if e.strip()]
+    if not raw_list:
+        return jsonify({"error": "No valid email addresses provided."}), 400
+
+    email_regex = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+    for e in raw_list:
+        if not re.match(email_regex, e):
+            return jsonify({"error": f"Invalid email format: '{e}'. Please check spelling."}), 400
+
+    recipients_str = ", ".join(raw_list)
+
+    db = SessionLocal()
+    try:
+        session = db.get(VivaSession, session_id)
+        if not session:
+            return jsonify({"error": "Session not found."}), 404
+
+        project = db.get(Project, session.project_id)
+        if not project:
+            return jsonify({"error": "Project not found."}), 404
+
+        answered_questions = [q.to_dict() for q in session.questions if q.student_answer]
+        if not answered_questions:
+            return jsonify({"error": "Cannot send report: no questions have been answered yet."}), 400
+
+        try:
+            report = generate_final_report(
+                project_title=project.title,
+                session_data=session.to_dict(),
+                questions=answered_questions,
+            )
+        except Exception:
+            report = {
+                "overall_score": round(session.overall_score, 1),
+                "grade": "B" if session.overall_score >= 70 else "C",
+                "executive_summary": f"Viva examination completed for project '{project.title}'.",
+                "strong_areas": [],
+                "weak_areas": [],
+                "revision_topics": [],
+                "practice_questions": [],
+                "examiner_comments": "Performance report generated.",
+            }
+
+        html_body = _build_report_email_html(project.title, report, session.to_dict(), answered_questions)
+        text_body = (
+            f"AI Viva Voce Performance Report\n"
+            f"Project: {project.title}\n"
+            f"Overall Score: {report.get('overall_score', 0)}/100 (Grade: {report.get('grade', 'B')})\n\n"
+            f"Summary:\n{report.get('executive_summary', '')}\n\n"
+            f"Examiner Comments:\n{report.get('examiner_comments', '')}\n"
+        )
+
+        # Store in cache so user can view/preview anytime
+        _LAST_SENT_EMAILS[session_id] = {
+            "email": recipients_str,
+            "project_title": project.title,
+            "html": html_body,
+            "text": text_body,
+            "score": report.get("overall_score"),
+            "grade": report.get("grade"),
+            "sent_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        dispatched = False
+        status_note = ""
+
+        if Config.SMTP_SERVER and Config.SMTP_USER:
+            try:
+                msg = MIMEMultipart("alternative")
+                msg["Subject"] = f"Viva Voce Report: {project.title} (Score: {report.get('overall_score', 0)}/100)"
+                msg["From"] = Config.SMTP_FROM_EMAIL
+                msg["To"] = recipients_str
+                msg.attach(MIMEText(text_body, "plain"))
+                msg.attach(MIMEText(html_body, "html"))
+
+                if Config.SMTP_PORT == 465:
+                    with smtplib.SMTP_SSL(Config.SMTP_SERVER, Config.SMTP_PORT, timeout=12) as server:
+                        if Config.SMTP_PASSWORD:
+                            server.login(Config.SMTP_USER, Config.SMTP_PASSWORD)
+                        server.sendmail(Config.SMTP_FROM_EMAIL, raw_list, msg.as_string())
+                else:
+                    with smtplib.SMTP(Config.SMTP_SERVER, Config.SMTP_PORT, timeout=12) as server:
+                        server.starttls()
+                        if Config.SMTP_PASSWORD:
+                            server.login(Config.SMTP_USER, Config.SMTP_PASSWORD)
+                        server.sendmail(Config.SMTP_FROM_EMAIL, raw_list, msg.as_string())
+
+                dispatched = True
+                status_note = "Email delivered directly via SMTP."
+            except Exception as mail_err:
+                logger.warning("SMTP email dispatch failed: %s", mail_err)
+                status_note = f"Report prepared in Preview Mode (SMTP relay error: {mail_err})."
+        else:
+            status_note = "Report generated in Preview Mode (configure SMTP in .env for external inbox delivery)."
+
+        return jsonify({
+            "success": True,
+            "message": f"Viva report generated for {recipients_str}! {status_note}",
+            "email": recipients_str,
+            "recipients": raw_list,
+            "score": report.get("overall_score"),
+            "grade": report.get("grade"),
+            "dispatched": dispatched,
+            "preview_mode": not dispatched,
+            "preview_url": f"/api/sessions/{session_id}/email-preview",
+            "download_url": f"/api/sessions/{session_id}/email-download",
+        })
+    finally:
+        db.close()
+
+
+@sessions_bp.route("/<int:session_id>/email-preview", methods=["GET"])
+def preview_email(session_id: int):
+    """View the HTML email that was generated and dispatched."""
+    record = _LAST_SENT_EMAILS.get(session_id)
+    if not record:
+        # Generate on the fly if not cached
+        db = SessionLocal()
+        try:
+            session = db.get(VivaSession, session_id)
+            if not session:
+                return "Session not found.", 404
+            project = db.get(Project, session.project_id)
+            if not project:
+                return "Project not found.", 404
+            answered = [q.to_dict() for q in session.questions if q.student_answer]
+            report = generate_final_report(project.title, session.to_dict(), answered)
+            html_body = _build_report_email_html(project.title, report, session.to_dict(), answered)
+            return html_body, 200, {"Content-Type": "text/html; charset=utf-8"}
+        finally:
+            db.close()
+    return record["html"], 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@sessions_bp.route("/<int:session_id>/email-download", methods=["GET"])
+def download_email(session_id: int):
+    """Download the HTML email report as an .html file."""
+    record = _LAST_SENT_EMAILS.get(session_id)
+    content = record["html"] if record else "<h3>No email record found.</h3>"
+    from flask import Response
+    return Response(
+        content,
+        mimetype="text/html",
+        headers={"Content-Disposition": f"attachment; filename=viva_report_email_{session_id}.html"},
+    )
 
 
 @sessions_bp.route("/<int:session_id>", methods=["DELETE"])

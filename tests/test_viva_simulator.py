@@ -322,8 +322,17 @@ class TestSpeechEndpoint:
 # ── Test: Frontend routes ──────────────────────────────────
 class TestFrontendRoutes:
 
-    def test_index(self, client):
+    def test_welcome_page(self, client):
         res = client.get("/")
+        assert res.status_code == 200
+        assert b"Arc Reactor" in res.data or b"Viva" in res.data
+
+    def test_welcome_alias(self, client):
+        res = client.get("/welcome")
+        assert res.status_code == 200
+
+    def test_dashboard(self, client):
+        res = client.get("/dashboard")
         assert res.status_code == 200
         assert b"Viva Simulator" in res.data or b"viva" in res.data.lower()
 
@@ -340,3 +349,51 @@ class TestFrontendRoutes:
         assert res.status_code == 404
         data = res.get_json()
         assert "error" in data
+
+
+# ── Test: Arc Reactor Agent API ────────────────────────────
+class TestArcReactorAgentAPI:
+
+    def test_agent_chat_empty_message(self, client):
+        res = client.post("/api/agent/chat",
+                          data=json.dumps({"message": ""}),
+                          content_type="application/json")
+        assert res.status_code == 400
+        data = res.get_json()
+        assert "error" in data
+
+    def test_agent_chat_general_query(self, client):
+        res = client.post("/api/agent/chat",
+                          data=json.dumps({"message": "What is normalization in databases?"}),
+                          content_type="application/json")
+        assert res.status_code == 200
+        data = res.get_json()
+        assert "response" in data
+        assert "agent_name" in data
+
+
+# ── Test: Email Report API ─────────────────────────────────
+class TestEmailReportAPI:
+
+    def test_email_report_missing_email(self, client):
+        res = client.post("/api/sessions/1/email-report",
+                          data=json.dumps({}),
+                          content_type="application/json")
+        assert res.status_code == 400
+
+    def test_email_report_invalid_format(self, client):
+        res = client.post("/api/sessions/1/email-report",
+                          data=json.dumps({"email": "not-an-email"}),
+                          content_type="application/json")
+        assert res.status_code == 400
+        assert "Invalid" in res.get_json()["error"]
+
+    def test_email_report_nonexistent_session(self, client):
+        res = client.post("/api/sessions/99999/email-report",
+                          data=json.dumps({"email": "student@example.com"}),
+                          content_type="application/json")
+        assert res.status_code == 404
+
+    def test_email_preview_nonexistent_session(self, client):
+        res = client.get("/api/sessions/99999/email-preview")
+        assert res.status_code == 404

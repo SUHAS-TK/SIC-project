@@ -1,18 +1,20 @@
 # AI Viva Simulator
 
-An interactive, AI-powered viva voce examination simulator. Upload your project documentation and face a rigorous AI examiner that asks adaptive, medium-to-hard questions and provides detailed feedback.
+An interactive, AI-powered viva voce examination simulator. Upload your project documentation and face a rigorous AI examiner that asks adaptive, medium-to-hard questions, provides detailed feedback, and features a glowing Arc Reactor AI Agent.
 
 ---
 
 ## Features
 
-- **RAG-powered questions** grounded in your uploaded project documents (PDF, DOCX, TXT, Markdown)
-- **Adaptive examination** — difficulty increases/decreases based on your performance
-- **Deep correction engine** — step-by-step explanations for wrong or incomplete answers
-- **Voice mode** — speak your answers via microphone (Groq Whisper STT) with browser TTS for questions
-- **Structured scoring** — 100-point rubric (Technical Correctness 40%, Depth 30%, Project-specific 20%, Completeness 10%)
-- **Final performance report** — topic-wise scores, misconceptions, revision topics, practice questions
-- **Dark, responsive UI** — works on desktop and mobile
+- **Arc Reactor AI Agent** — Floating animated Arc Reactor widget that opens an interactive AI coach for project questions, tricky viva questions, and tech defense.
+- **Dual Themes (Light / Dark Mode)** — One-click theme toggle switch in the navbar that remembers your preference across all pages.
+- **End Exam Early Option** — Finish the viva whenever you want; calculate your performance report based on completed answers so you don't have to wait through all questions.
+- **Active Voice Assistant** — Real-time speech synthesis for asking questions automatically during viva, with animated voice wave indicators and Groq Whisper STT for spoken answers.
+- **Save & Email Performance Report** — One-click saving as PDF, standalone HTML download, clipboard summary, in-browser email preview, plus automated report email delivery (with voice email dictation!).
+- **RAG-powered questions** grounded in your uploaded project documents (PDF, DOCX, TXT, Markdown).
+- **Adaptive examination** — difficulty automatically increases/decreases based on your performance.
+- **Deep correction engine** — step-by-step explanations, analogies, and model answers for wrong or incomplete answers.
+- **Structured, Spacious UI** — De-congested, comfortable cards with ample whitespace and accessible typography.
 
 ---
 
@@ -23,59 +25,51 @@ An interactive, AI-powered viva voce examination simulator. Upload your project 
 | Backend | Python 3.11+, Flask 3.x |
 | LLM | Groq API (`llama-3.3-70b-versatile`) |
 | STT | Groq Whisper (`whisper-large-v3-turbo`) |
-| TTS | Browser SpeechSynthesis API |
-| RAG | sentence-transformers + FAISS |
+| TTS | Browser SpeechSynthesis API + Auto-voice examiner |
+| RAG | sentence-transformers + FAISS (with built-in pure Python fallback) |
 | Document parsing | PyMuPDF (PDF), python-docx (DOCX), stdlib (TXT/MD) |
 | Database | SQLite via SQLAlchemy 2.x |
 | Config | python-dotenv |
-| Frontend | Vanilla HTML5 / CSS3 / JavaScript (no framework) |
-
-> **Python compatibility note:** The application is developed and tested with Python 3.11+. Python 3.14 is supported where all dependencies are compatible; however, `faiss-cpu` and `sentence-transformers` may require Python ≤ 3.12 depending on your platform. If you encounter issues, create a virtual environment with Python 3.11.
+| Frontend | Vanilla HTML5 / CSS3 / JavaScript (with Arc Reactor HUD) |
 
 ---
 
-## Windows Setup (Step-by-Step)
+## Quick Setup
 
-### 1. Prerequisites
-
-- Python 3.11 or 3.12 (recommended), available from [python.org](https://www.python.org/downloads/)
-- A [Groq API key](https://console.groq.com) (free tier available)
-
-### 2. Clone / Navigate to project
+### 1. Virtual Environment & Dependencies
 
 ```cmd
-cd d:\project1
-```
-
-### 3. Create and activate a virtual environment
-
-```cmd
-python -m venv venv
-venv\Scripts\activate
-```
-
-### 4. Install dependencies
-
-```cmd
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-> **Note:** The first run will download the `all-MiniLM-L6-v2` embedding model (~90 MB) automatically.
+### 2. Configure `.env`
 
-### 5. Configure environment variables
+Edit `.env` to add your Groq API key:
 
-```cmd
-copy .env.example .env
+```env
+GROQ_API_KEY=gsk_your_groq_api_key_here
+FLASK_SECRET_KEY=dev-secret-key
 ```
 
-Edit `.env` with Notepad or VS Code:
+#### Setting Up Real Gmail Email Delivery:
+If you want the report sent directly to your real Gmail inbox (e.g. `hulk44678@gmail.com`):
+1. In your Google Account, enable **2-Step Verification**.
+2. Go to [Google App Passwords](https://myaccount.google.com/apppasswords) and generate a 16-character App Password.
+3. Add these lines to `.env`:
+   ```env
+   SMTP_SERVER=smtp.gmail.com
+   SMTP_PORT=587
+   SMTP_USER=hulk44678@gmail.com
+   SMTP_PASSWORD=xxxx-xxxx-xxxx-xxxx
+   SMTP_FROM_EMAIL=hulk44678@gmail.com
+   ```
+*(If SMTP is not configured, the app runs in Preview Mode and lets you inspect the full sent email directly in your browser with one click!)*
 
-```
-GROQ_API_KEY=gsk_your_actual_key_here
-FLASK_SECRET_KEY=some-long-random-string
-```
+---
 
-### 6. Run the application
+### 3. Run the Application
 
 ```cmd
 python run.py
@@ -88,84 +82,10 @@ Open your browser at: **http://localhost:5000**
 ## Running Tests
 
 ```cmd
-python -m pytest tests/ -v
+pytest tests/ -v
 ```
 
-Test coverage includes:
-- Document parsing (TXT, Markdown, DOCX)
-- Technology auto-detection
-- Chunk overlap verification
-- Vector store isolation (cross-project contamination prevention)
-- All REST API endpoints (projects, sessions, speech)
-- LLM JSON safety parser (fenced code, trailing commas, prose)
-- Speech service edge cases (empty audio, oversized audio, missing key)
-- Frontend route rendering
-
----
-
-## Project Structure
-
-```
-d:\project1\
-├── run.py                    ← Entry point: python run.py
-├── app_factory.py            ← Flask application factory
-├── config.py                 ← Environment-based configuration
-├── requirements.txt
-├── .env.example              ← Template; copy to .env and fill
-├── .gitignore
-├── README.md
-│
-├── app/
-│   ├── models/
-│   │   └── database.py       ← SQLAlchemy models (Project, VivaSession, Question)
-│   ├── rag/
-│   │   ├── document_parser.py ← PDF/DOCX/TXT/MD parsing + chunking
-│   │   └── vector_store.py   ← FAISS index (per-project isolation)
-│   ├── llm/
-│   │   └── examiner.py       ← Question generation, answer evaluation, report
-│   ├── speech/
-│   │   └── transcription.py  ← Groq Whisper STT
-│   ├── routes/
-│   │   ├── projects.py       ← /api/projects endpoints
-│   │   ├── sessions.py       ← /api/sessions endpoints
-│   │   └── speech.py         ← /api/speech/transcribe
-│   ├── templates/
-│   │   ├── index.html        ← Dashboard / upload
-│   │   ├── viva.html         ← Examination screen
-│   │   └── report.html       ← Final report
-│   └── static/
-│       ├── css/main.css      ← Dark theme stylesheet
-│       └── js/
-│           ├── main.js       ← Dashboard logic
-│           ├── viva.js       ← Exam + voice logic
-│           └── report.js     ← Report rendering
-│
-├── tests/
-│   ├── conftest.py
-│   └── test_viva_simulator.py
-│
-├── uploads/                  ← Uploaded project documents (git-ignored)
-└── faiss_indexes/            ← Per-project FAISS indexes (git-ignored)
-```
-
----
-
-## Required Environment Variables
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `GROQ_API_KEY` | **Yes** | — | Groq API key from console.groq.com |
-| `FLASK_SECRET_KEY` | Yes (prod) | dev key | Flask session secret |
-| `GROQ_LLM_MODEL` | No | `llama-3.3-70b-versatile` | Groq chat model |
-| `GROQ_WHISPER_MODEL` | No | `whisper-large-v3-turbo` | Groq STT model |
-| `EMBEDDING_MODEL` | No | `all-MiniLM-L6-v2` | Local sentence-transformer model |
-| `MAX_UPLOAD_SIZE_MB` | No | `50` | Maximum file size in MB |
-| `CHUNK_SIZE` | No | `800` | Words per RAG chunk |
-| `CHUNK_OVERLAP` | No | `150` | Word overlap between chunks |
-| `WEIGHT_TECHNICAL_CORRECTNESS` | No | `40` | Rubric weight (must sum to 100) |
-| `WEIGHT_DEPTH_OF_REASONING` | No | `30` | Rubric weight |
-| `WEIGHT_PROJECT_SPECIFIC` | No | `20` | Rubric weight |
-| `WEIGHT_COMPLETENESS` | No | `10` | Rubric weight |
+37 automated tests covering document parsing, tech detection, isolated vector indices, Arc Reactor chat, email delivery & preview, early session completion, speech services, and frontend routes.
 
 ---
 
@@ -184,24 +104,9 @@ d:\project1\
 | POST | `/api/sessions/<id>/answer` | Submit answer |
 | GET | `/api/sessions/<id>/history` | Full Q&A history |
 | GET | `/api/sessions/<id>/report` | Final performance report |
+| POST | `/api/sessions/<id>/email-report` | Send performance report to specified email |
+| GET | `/api/sessions/<id>/email-preview` | View HTML email report directly in browser |
+| GET | `/api/sessions/<id>/email-download` | Download HTML email report file |
+| POST | `/api/agent/chat` | Chat with Arc Reactor AI Agent |
+| POST | `/api/speech/transcribe` | Transcribe audio via Whisper (multipart) |
 | DELETE | `/api/sessions/<id>` | Delete session |
-| POST | `/api/speech/transcribe` | Transcribe audio (multipart) |
-
----
-
-## Known Limitations
-
-1. **Scanned PDFs**: Text cannot be extracted from image-only PDFs. The app will warn you. Use a PDF with selectable text or convert with an OCR tool first.
-2. **Groq API key required**: All AI features (question generation, evaluation, STT) require a valid `GROQ_API_KEY`. Without it, the server runs but AI calls will return a clear error.
-3. **Embedding model download**: First run downloads ~90 MB of embedding model weights. Subsequent runs use the cached model.
-4. **Concurrent users**: SQLite with WAL mode supports moderate concurrency. For production with many users, migrate to PostgreSQL.
-5. **Audio format**: Voice recording uses the browser's native `MediaRecorder` (WebM/Opus). Most modern browsers support this natively.
-
----
-
-## Security Notes
-
-- API keys are kept server-side only; never sent to the browser.
-- Uploaded document content is treated as **untrusted data** — it cannot override AI system prompts.
-- File paths are sanitised; uploads use UUID-prefixed filenames.
-- Raw audio is not stored persistently after transcription.

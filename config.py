@@ -41,6 +41,16 @@ class Config:
     WEIGHT_PROJECT_SPECIFIC: int = int(os.environ.get("WEIGHT_PROJECT_SPECIFIC", "20"))
     WEIGHT_COMPLETENESS: int = int(os.environ.get("WEIGHT_COMPLETENESS", "10"))
 
+    # Email / SMTP Configuration
+    SMTP_SERVER: str = os.environ.get("SMTP_SERVER", "")
+    SMTP_PORT: int = int(os.environ.get("SMTP_PORT", "587"))
+    SMTP_USER: str = os.environ.get("SMTP_USER", "")
+    SMTP_PASSWORD: str = os.environ.get("SMTP_PASSWORD", "")
+    SMTP_FROM_EMAIL: str = os.environ.get("SMTP_FROM_EMAIL", os.environ.get("SMTP_USER", "viva-simulator@example.com"))
+
+    # Arc Reactor AI Agent (default name)
+    AGENT_NAME: str = os.environ.get("AGENT_NAME", "Arc Reactor AI Agent")
+
     @classmethod
     def validate(cls) -> list[str]:
         """Return list of configuration warnings."""
